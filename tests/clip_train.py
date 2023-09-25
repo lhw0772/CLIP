@@ -11,8 +11,66 @@ from sklearn.metrics import average_precision_score
 from tqdm import tqdm  # tqdm 라이브러리 임포트
 import argparse
 import wandb
+from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
+
+try:
+    from torchvision.transforms import InterpolationMode
+    BICUBIC = InterpolationMode.BICUBIC
+except ImportError:
+    BICUBIC = Image.BICUBIC
+
+from torchvision.transforms import RandomResizedCrop, RandomHorizontalFlip
+
+import os
+#os.environ["WANDB_MODE"]="offline"
+
+# Set a fixed seed for CPU operations
+seed = 100
+torch.manual_seed(seed)
+
+# Set a fixed seed for GPU operations (if available)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+# Additional steps for improved reproducibility (may slow down performance)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+chest_gpt35_combined_label = [
+    "pleural_effusion is an irregular-shaped bump, often appearing as white, near the pleural space.",
+    "nodule is a round or oval-shaped bump, often in white or light gray, within the lung tissue.",
+    "pneumonia is an irregular-shaped area with increased opacity, often in white or gray, within the lung.",
+    "cardiomegaly is an enlargement of the heart, typically appearing as an enlarged white shadow in the cardiac area.",
+    "hilar_enlargement is an enlargement of the hilar region of the lungs, often presenting as increased white density in that area.",
+    "fracture_old is a discontinuity or irregularity in the bone structure, possibly showing as white lines or gaps in a bone.",
+    "fibrosis is a diffuse, irregular pattern of increased opacity, often appearing as white streaks or patches throughout the lung.",
+    "aortic_calcification is the calcification or hardening of the aorta, typically seen as white deposits along the aortic wall.",
+    "tortuous_aorta is a twisted or curved appearance of the aorta, often seen as an irregular white line.",
+    "thickened_pleura is a thickening of the pleural lining, usually appearing as a white or opaque layer along the lung's outer surface.",
+    "TB is a pattern of nodules or irregularities, often appearing as white or gray areas within the lung tissue.",
+    "pneumothorax is an air-filled space within the pleural cavity, often seen as a dark area or absence of lung markings.",
+    "emphysema is a pattern of increased lung volume with reduced density, often appearing as darker areas in the lung.",
+    "atelectasis is a collapse or partial collapse of the lung, often appearing as a white or opaque area within the lung tissue.",
+    "calcification is the presence of calcium deposits, typically seen as white spots or areas within a tissue.",
+    "pulmonary_edema is an accumulation of fluid in the lungs, often appearing as increased white density throughout the lung fields.",
+    "increased_lung_markings is an increased prominence of lung markings, often appearing as darker lines or streaks on the X-ray.",
+    "elevated_diaphragm is an elevation or abnormal position of the diaphragm, often seen as an irregular white line near the lower lung border.",
+    "consolidation is a solidification of lung tissue, often appearing as a white, opaque area within the lung."
+]
+
+endo_gpt35_combined_label =[
+    "ulcer is a sore or lesion on the inner lining of the digestive tract, often appearing as an open, crater-like area.",
+    "erosion is the gradual wearing away of the lining of the digestive tract, often presenting as a shallow, superficial loss of tissue.",
+    "polyp is a small growth or mass protruding from the inner lining of the digestive tract, often appearing as a round or elongated structure.",
+    "tumor is an abnormal mass or lump within the digestive tract, often showing as an irregular, solid growth."
+]
+
+
+gpt35_label_dict = {"chest": chest_gpt35_combined_label, "endo": endo_gpt35_combined_label}
 
 label_dict = {"chest": ['pleural_effusion','nodule','pneumonia','cardiomegaly','hilar_enlargement',
               'fracture_old','fibrosis','aortic_calcification','tortuous_aorta','thickened_pleura' ,'TB','pneumothorax',
@@ -59,6 +117,17 @@ filtered_chest_prior_disc = [['Fluid Accumulation', 'Thoracic Cavity', 'Opacity'
 ['Bronchovascular'],
 ['Breathing Difficulty'],
 ['Gray', 'Airspace', 'Alveoli', 'Solidification', 'Density', 'Opacity', 'Tissue']]
+
+def _convert_image_to_rgb(image):
+    return image.convert("RGB")
+def train_transform(n_px):
+    return Compose([
+        RandomResizedCrop(n_px, scale=(0.08, 1.0), ratio=(0.75, 1.333), interpolation=3),  # RandomResizedCrop
+        RandomHorizontalFlip(),  # RandomFlip
+        _convert_image_to_rgb,
+        ToTensor(),
+        Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
+    ])
 
 class CustomDataset(Dataset):
     def __init__(self, data_root, file_list,task,list_txt, preprocess):
@@ -359,7 +428,9 @@ def finetune_model(train_dataloader,optimizer, model,classifier , update_layer, 
             images = images.to(device)
             texts = texts[0].to(device)
 
-            #mage_features = model.encode_image(images)
+            if classifier:
+                if classifier.in_features == 768:
+                    image_features = model.encode_image(images)
             #text_features = model.encode_text(texts)
 
             logits_per_image, logits_per_text = model(images, texts)
@@ -368,7 +439,10 @@ def finetune_model(train_dataloader,optimizer, model,classifier , update_layer, 
                 ground_truth = torch.tensor(label, dtype=torch.float32).to(device).detach()
 
             if classifier:
-                logits_per_image = torch.sigmoid(classifier(logits_per_image.float()))
+                if classifier.in_features ==19:
+                    logits_per_image = torch.sigmoid(classifier(logits_per_image.float()))
+                elif classifier.in_features ==768:
+                    logits_per_image = torch.sigmoid(classifier(image_features.float()))
 
             #logits_per_text = torch.sigmoid(logits_per_text)
 
@@ -391,15 +465,18 @@ def main():
     parser.add_argument("-lr", type=float, help="learning_rate",default=1e-5)
     parser.add_argument("-update_mode", type=int, help="update mode",default=0)
     parser.add_argument("-text_emb", type=int, help="text embedding mode", default=0)
-    parser.add_argument("-bs", type=int, help="batch size", default=32)
+    parser.add_argument("-bs", type=int, help="batch size", default=16)
     parser.add_argument("-epochs", type=int, help="epochs", default=30)
     parser.add_argument("-task", type=str, help="task", default="chest")
     parser.add_argument("-shot", type=int, help="shot", default=5)
     parser.add_argument("-exp", type=int, help="exp", default=1)
-    parser.add_argument("-usage_clssifier", type=int, help="usage_clssifier", default=0)
+    parser.add_argument("-usage_classifier", type=int, help="usage_classifier", default=0)
+    parser.add_argument("-usage_prior_label", type=int, help="usage_prior_label", default=0)
+    parser.add_argument("-usage_aug", type=int, help="usage_aug", default=0)
+
     args = parser.parse_args()
 
-    wandb.init(project="clip-medfm", config=args)
+    wandb.init(project="clip-medfm-0925", config=args)
 
     task = args.task
     shot = args.shot
@@ -411,15 +488,26 @@ def main():
     val_data_list = f'/data/MedFMC/{task}/{task}_{shot}-shot_val_exp{exp}.txt'
     test_data_list = f'/data/MedFMC/{task}/test_WithoutLabel2.txt'
     file_prefix = f'/data/MedFMC/{task}/images'
-    label_list = label_dict[task]
 
-    model, preprocess = clip.load("ViT-L/14", device=device, jit=False)
+    if args.usage_aug == 0:
+        model, preprocess = clip.load("ViT-L/14", device=device, jit=False)
+    else:
+        model, preprocess = clip.load("ViT-L/14", device=device, jit=False)
+        train_preprocess =  train_transform(model.visual.input_resolution)
 
     if LOAD:
         model.load_state_dict(torch.load("model_weights.pth"))
 
-    if args.usage_clssifier:
+    if args.usage_prior_label:
+        label_list = gpt35_label_dict[task]
+    else:
+        label_list = label_dict[task]
+
+    if args.usage_classifier == 1:
         classifier = nn.Linear(len(label_list), len(label_list)).to(device)
+        params_optimize = list(model.parameters()) + list(classifier.parameters())
+    elif args.usage_classifier == 2:
+        classifier = nn.Linear(768, len(label_list)).to(device)
         params_optimize = list(model.parameters()) + list(classifier.parameters())
     else:
         classifier = None
@@ -427,7 +515,10 @@ def main():
 
     optimizer = torch.optim.Adam(params_optimize, lr=args.lr,betas=(0.9,0.98),eps=1e-6,weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
-    train_dataset = CustomDataset(file_prefix, train_data_list,task ,label_list, preprocess)
+    if args.usage_aug == 0:
+        train_dataset = CustomDataset(file_prefix, train_data_list,task ,label_list, preprocess)
+    else:
+        train_dataset = CustomDataset(file_prefix, train_data_list, task, label_list, train_preprocess)
     train_dataloader = DataLoader(train_dataset,batch_size = args.bs)
     val_dataset = CustomDataset(file_prefix, val_data_list,task ,label_list , preprocess)
     val_dataloader = DataLoader(val_dataset,batch_size = args.bs)
@@ -447,6 +538,13 @@ def main():
                        "token_embedding","text_projection"]
     elif args.update_mode == 5:
         update_list = ['logit_scale', 'visual',"token_embedding","text_projection"]
+    elif args.update_mode == 6:
+        scaler_list = ['logit_scale']
+        projector_list = ['text_projection','visual.proj']
+        visual_list = ['visual.transformer','visual.ln_post','visual.ln_pre']
+        text_list = ['transformer.resblocks','token_embedding','ln_final','text_projection']
+
+        update_list = scaler_list+projector_list+visual_list+text_list
 
 
     for stage in range(args.epochs):
