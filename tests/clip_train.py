@@ -22,6 +22,8 @@ except ImportError:
 from torchvision.transforms import RandomResizedCrop, RandomHorizontalFlip
 
 import os
+from coop.coop import CustomCLIP
+
 #os.environ["WANDB_MODE"]="offline"
 
 # Set a fixed seed for CPU operations
@@ -36,6 +38,8 @@ if torch.cuda.is_available():
 # Additional steps for improved reproducibility (may slow down performance)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
+
+WANDB_TITLE = "clip-medfm-0926-test"
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -194,7 +198,7 @@ def get_probs(model, img_name, input_txts):
 
     return probs
 
-def zeroshot_process(data_loader, model, label_list):
+def zeroshot_process(args,data_loader, model, label_list):
 
     mean_corr = []
     #predictions = []
@@ -210,7 +214,10 @@ def zeroshot_process(data_loader, model, label_list):
         texts = texts[0].to(device)
 
         with torch.no_grad():
-            logits_per_image, logits_per_text = model(images, texts)
+            if args.coop:
+                logits_per_image = model(images)
+            else:
+                logits_per_image, logits_per_text = model(images, texts)
             probs = logits_per_image.cpu().numpy()
             predictions = np.concatenate((predictions,probs),axis=0)
             labels = np.concatenate((labels, label), axis=0)
@@ -321,7 +328,7 @@ def contrastive_loss(origin_anchor_emb, positive_emb, negative_emb, margin):
     return loss
 
 
-def text_emb_learning(model,optimizer, cls_texts, prior_disc,margin,epochs=20,save=False):
+def text_emb_learning(args,model,optimizer, cls_texts, prior_disc,margin,epochs=20,save=False):
     model.eval()
     # Freeze all model parameters
     for name, param in model.named_parameters():
@@ -398,7 +405,7 @@ def text_emb_learning(model,optimizer, cls_texts, prior_disc,margin,epochs=20,sa
 
 
 
-def finetune_model(train_dataloader,optimizer, model,classifier , update_layer, epoch ):
+def finetune_model(args,train_dataloader,optimizer, model, classifier , update_layer, epoch ):
 
     model.eval()
     # Freeze all model parameters
@@ -432,8 +439,10 @@ def finetune_model(train_dataloader,optimizer, model,classifier , update_layer, 
                 if classifier.in_features == 768:
                     image_features = model.encode_image(images)
             #text_features = model.encode_text(texts)
-
-            logits_per_image, logits_per_text = model(images, texts)
+            if args.coop:
+                logits_per_image = model(images)
+            else:
+                logits_per_image, logits_per_text = model(images, texts)
             #logits_per_text = logits_per_text.T
             with torch.no_grad():
                 ground_truth = torch.tensor(label, dtype=torch.float32).to(device).detach()
@@ -473,10 +482,14 @@ def main():
     parser.add_argument("-usage_classifier", type=int, help="usage_classifier", default=0)
     parser.add_argument("-usage_prior_label", type=int, help="usage_prior_label", default=0)
     parser.add_argument("-usage_aug", type=int, help="usage_aug", default=0)
+    parser.add_argument("-test_freq", type=int, help="test_freq", default=5)
+    parser.add_argument("-test_mode", type=str, help="test_mode", default='val')
+    parser.add_argument("-coop", type=int, help="coop", default=0)
+
 
     args = parser.parse_args()
 
-    wandb.init(project="clip-medfm-0925", config=args)
+    wandb.init(project=WANDB_TITLE, config=args)
 
     task = args.task
     shot = args.shot
@@ -503,6 +516,11 @@ def main():
     else:
         label_list = label_dict[task]
 
+    if args.coop:
+        model = CustomCLIP(label_list, model.to('cpu'))
+        model.to(device)
+
+
     if args.usage_classifier == 1:
         classifier = nn.Linear(len(label_list), len(label_list)).to(device)
         params_optimize = list(model.parameters()) + list(classifier.parameters())
@@ -511,9 +529,7 @@ def main():
         params_optimize = list(model.parameters()) + list(classifier.parameters())
     else:
         classifier = None
-        params_optimize = model.parameters()
-
-    optimizer = torch.optim.Adam(params_optimize, lr=args.lr,betas=(0.9,0.98),eps=1e-6,weight_decay=0.2) #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
+        params_optimize = model.parameters() #Params used from paper, the lr is smaller, more safe for fine tuning to new dataset
 
     if args.usage_aug == 0:
         train_dataset = CustomDataset(file_prefix, train_data_list,task ,label_list, preprocess)
@@ -524,6 +540,11 @@ def main():
     val_dataloader = DataLoader(val_dataset,batch_size = args.bs)
     test_dataset = CustomDataset(file_prefix, test_data_list,task ,label_list , preprocess)
     test_dataloader = DataLoader(test_dataset,batch_size = args.bs)
+
+    if args.test_mode == 'val':
+        selected_dataloader =  val_dataloader
+    else:
+        selected_dataloader = test_dataloader
 
     if args.update_mode == 0:
         update_list = ['logit_scale','visual.proj','visual.conv1']
@@ -546,12 +567,19 @@ def main():
 
         update_list = scaler_list+projector_list+visual_list+text_list
 
+    if args.coop:
+        update_list = ['prompt_learner.ctx']
+        params_optimize = model.prompt_learner.parameters()
+
+    optimizer = torch.optim.Adam(params_optimize, lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
+
 
     for stage in range(args.epochs):
         if args.text_emb:
-            text_emb_learning(model,optimizer,label_list,chest_prior_disc,margin=1.0,epochs=1)
-        finetune_model(train_dataloader,optimizer, model, classifier,update_list, epoch=1)
-        score = zeroshot_process(val_dataloader,model,label_list)
+            text_emb_learning(args,model,optimizer,label_list,chest_prior_disc,margin=1.0,epochs=1)
+        finetune_model(args,train_dataloader,optimizer, model, classifier,update_list, epoch=1)
+        if stage%args.test_freq ==0:
+            score = zeroshot_process(args,selected_dataloader,model,label_list)
         wandb.log({"val_mAP": score})
 
 
