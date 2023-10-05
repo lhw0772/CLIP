@@ -23,6 +23,8 @@ from torchvision.transforms import RandomResizedCrop, RandomHorizontalFlip
 
 import os
 from coop.coop import CustomCLIP
+from coop.dualcoop import build_model
+from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLoss3
 
 os.environ["WANDB_MODE"]="offline"
 
@@ -205,6 +207,7 @@ def zeroshot_process(args,data_loader, model, label_list):
 
     predictions = np.empty((0,len(label_list)),dtype=np.float32)
     labels = np.empty((0, len(label_list)), dtype=np.float32)
+    Softmax = torch.nn.Softmax(dim=1)
 
     for batch in tqdm(data_loader, total=len(data_loader)):
         images, texts, label = batch
@@ -215,6 +218,9 @@ def zeroshot_process(args,data_loader, model, label_list):
         with torch.no_grad():
             if args.coop:
                 logits_per_image = model(images)
+            elif args.dualcoop:
+                logits_per_image = model(images,None)
+                logits_per_image = Softmax(logits_per_image.detach())[:, 1, :]
             else:
                 logits_per_image, logits_per_text = model(images, texts)
             probs = logits_per_image.cpu().numpy()
@@ -438,8 +444,15 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
 
     model.eval()
     # Freeze all model parameters
-    for name, param in model.named_parameters():
-        param.requires_grad = False
+
+    if update_layer[0] =='x': # dualcoop
+        for name, param in model.named_parameters():
+            if name.find("text_encoder")!=-1:
+                param.requires_grad = False
+
+        model.prompt_learner.train()
+
+    else:
         for name, param in model.named_parameters():
 
             param.requires_grad = False
@@ -454,6 +467,12 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
             print(f"Parameter name: {name}, Requires gradient: {param.requires_grad}")
 
     loss_img = nn.BCEWithLogitsLoss()
+    coop_mlc_asl_gamma_neg = 2
+    coop_mlc_asl_gamma_pos = 1
+
+    criterion = AsymmetricLoss(coop_mlc_asl_gamma_neg, coop_mlc_asl_gamma_pos)
+    criterion2 = AsymmetricLoss2(coop_mlc_asl_gamma_neg, coop_mlc_asl_gamma_pos)
+    criterion3 = AsymmetricLoss3(coop_mlc_asl_gamma_neg, coop_mlc_asl_gamma_pos)
 
 
     for epoch_iter in range(epoch):
@@ -470,6 +489,8 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
             #text_features = model.encode_text(texts)
             if args.coop:
                 logits_per_image = model(images)
+            elif args.dualcoop:
+                logits_per_image = model(images, None)
             else:
                 logits_per_image, logits_per_text = model(images, texts)
             #logits_per_text = logits_per_text.T
@@ -487,7 +508,20 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
             #print (logits_per_image,logits_per_text )
             optimizer.zero_grad()
 
-            total_loss = loss_img(logits_per_image, ground_truth)
+            args_loss_w = 0.01
+
+            if args.dualcoop:
+                if logits_per_image.dim() == 3:
+                    total_loss = args_loss_w * criterion(logits_per_image, ground_truth)
+                elif args.single_prompt == 'pos':
+                    total_loss = args_loss_w * criterion2(logits_per_image, ground_truth)
+                elif args.single_prompt == 'neg':
+                    total_loss = args_loss_w * criterion3(logits_per_image, ground_truth)
+                else:
+                    raise ValueError
+
+            else:
+                total_loss = loss_img(logits_per_image, ground_truth)
 
             #print (logits_per_image)
             #print (ground_truth)
@@ -515,6 +549,7 @@ def main():
     parser.add_argument("-test_mode", type=str, help="test_mode", default='val')
     parser.add_argument("-coop", type=int, help="coop", default=0)
     parser.add_argument("-csc", type=int, help="csc", default=0)
+    parser.add_argument("-dualcoop", type=int, help="dualcoop", default=0)
 
 
     args = parser.parse_args()
@@ -549,7 +584,8 @@ def main():
     if args.coop:
         model = CustomCLIP(label_list, model.to('cpu'),args)
         model.to(device)
-
+    elif args.dualcoop:
+        model = build_model("RN50",label_list)
 
     if args.usage_classifier == 1:
         classifier = nn.Linear(len(label_list), len(label_list)).to(device)
@@ -600,6 +636,12 @@ def main():
     if args.coop:
         update_list = ['prompt_learner.ctx']
         params_optimize = model.prompt_learner.parameters()
+    elif args.dualcoop:
+        prompt_params = model.prompt_params()
+        prompt_group = {'params': prompt_params}
+        print('num of params in prompt learner: ', len(prompt_params))
+        params_optimize = [prompt_group]
+        update_list = ['x']
 
     optimizer_all = torch.optim.Adam(params_optimize, lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
     optimizer_text = torch.optim.Adam(model.parameters() , lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
