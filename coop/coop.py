@@ -27,15 +27,25 @@ def load_clip_to_cpu(cfg):
 
     return model
 class TextEncoder(nn.Module):
-    def __init__(self, clip_model):
+    def __init__(self, clip_model, use_forward_text=False):
         super().__init__()
         self.transformer = clip_model.transformer
         self.positional_embedding = clip_model.positional_embedding
         self.ln_final = clip_model.ln_final
         self.text_projection = clip_model.text_projection
         self.dtype = clip_model.dtype
+        self.use_forward_text = use_forward_text
+        self.clip_model = clip_model
 
     def forward(self, prompts, tokenized_prompts):
+        if self.use_forward_text:
+            x = self.forward_text(prompts, tokenized_prompts)
+        else:
+            x = self.forward_default(prompts, tokenized_prompts)
+
+        return x
+
+    def forward_default(self, prompts, tokenized_prompts):
         x = prompts + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
@@ -47,8 +57,26 @@ class TextEncoder(nn.Module):
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
 
         return x
+
+    def forward_text(self, text, tokenized_text):
+        x = self.clip_model.token_embedding(text).type(self.dtype)
+
+        x = x + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype)
+
+        # x.shape = [batch_size, n_ctx, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        x = x[torch.arange(x.shape[0]), tokenized_text.argmax(dim=-1)] @ self.text_projection
+
+        return x
+
+
+
 class PromptLearner(nn.Module):
-    def __init__(self, classnames, clip_model):
+    def __init__(self, classnames, clip_model,args):
         super().__init__()
         n_cls = len(classnames)
         n_ctx = 16
@@ -57,6 +85,7 @@ class PromptLearner(nn.Module):
         ctx_dim = clip_model.ln_final.weight.shape[0]
         clip_imsize = clip_model.visual.input_resolution
         cfg_imsize = 224
+        csc = args.csc
 
         if ctx_init:
             # use given words to initialize context vectors
@@ -70,12 +99,12 @@ class PromptLearner(nn.Module):
 
         else:
             # random initialization
-
-            #print("Initializing class-specific contexts")
-            #ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim, dtype=dtype)
-
-            print("Initializing a generic context")
-            ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
+            if csc:
+                print("Initializing class-specific contexts")
+                ctx_vectors = torch.empty(n_cls, n_ctx, ctx_dim, dtype=dtype)
+            else:
+                print("Initializing a generic context")
+                ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
             nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
 
@@ -171,9 +200,9 @@ class PromptLearner(nn.Module):
         return prompts
 
 class CustomCLIP(nn.Module):
-    def __init__(self, classnames, clip_model):
+    def __init__(self, classnames, clip_model,args):
         super().__init__()
-        self.prompt_learner = PromptLearner(classnames, clip_model)
+        self.prompt_learner = PromptLearner(classnames, clip_model,args)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)

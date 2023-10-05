@@ -24,7 +24,7 @@ from torchvision.transforms import RandomResizedCrop, RandomHorizontalFlip
 import os
 from coop.coop import CustomCLIP
 
-#os.environ["WANDB_MODE"]="offline"
+os.environ["WANDB_MODE"]="offline"
 
 # Set a fixed seed for CPU operations
 seed = 100
@@ -39,7 +39,7 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-WANDB_TITLE = "clip-medfm-0926-test"
+WANDB_TITLE = "clip-medfm-0926-test-coop-clip"
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -81,7 +81,6 @@ label_dict = {"chest": ['pleural_effusion','nodule','pneumonia','cardiomegaly','
               'emphysema','atelectasis','calcification','pulmonary_edema','increased_lung_markings',
               'elevated_diaphragm','consolidation'], "endo":['ulcer','erosion','polyp','tumor']}
 
-#chest_prior_disc =[['pleural_effusion','pleura','small']]
 chest_prior_disc = [["Fluid Accumulation", "Chest", "Opacity", "Gray", "Swelling", "Thoracic Cavity", "Localized", "Bilateral", "Unilateral", "Effusion"],
 ["Round", "Small", "Lung", "Lobe", "Gray", "Density", "Opacity", "Solitary", "Multiple", "Calcified", "Peripheral", "Central"],
 ["Infection", "Inflammation", "Consolidation", "Airspace", "Lung", "Bacterial", "Viral", "Alveoli", "Opacity", "Gray"],
@@ -340,14 +339,24 @@ def text_emb_learning(args,model,optimizer, cls_texts, prior_disc,margin,epochs=
 
     total_priors = [item for sublist in prior_disc for item in sublist]
 
-    #for name, param in model.named_parameters():
-    #    print(f"Parameter name: {name}, Requires gradient: {param.requires_grad}")
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"Parameter name: {name}, Requires gradient: {param.requires_grad}")
+
+    if args.coop :
+        text_encoder = model.text_encoder
+    else:
+        text_encoder = model.encode_text
 
 
     for epoch_idx in range(epochs):
         for cls_idx, cls_text in enumerate(cls_texts):
             tokenized_cls = clip.tokenize(cls_text).to(device)
-            cls_emb = model.encode_text(tokenized_cls)
+
+            if args.coop:
+                cls_emb = text_encoder(tokenized_cls,tokenized_cls)
+            else:
+                cls_emb = text_encoder(tokenized_cls)
 
             # pos_emb과 neg_emb에 대한 그래디언트 계산을 비활성화
             with torch.no_grad():
@@ -361,9 +370,15 @@ def text_emb_learning(args,model,optimizer, cls_texts, prior_disc,margin,epochs=
                 pos_txt = clip.tokenize(pos_list).to(device)
                 neg_txt = clip.tokenize(neg_list).to(device)
 
-                pos_emb = model.encode_text(pos_txt)
-                neg_emb = model.encode_text(neg_txt)
+                if args.coop:
+                    pos_emb = text_encoder(pos_txt, pos_txt)
+                else:
+                    pos_emb = text_encoder(pos_txt)
 
+                if args.coop:
+                    neg_emb = text_encoder(neg_txt, neg_txt)
+                else:
+                    neg_emb = text_encoder(neg_txt)
             optimizer.zero_grad()
             # cls_emb에 대한 그래디언트 계산을 활성화
             cls_emb.requires_grad_(True)
@@ -383,7 +398,11 @@ def text_emb_learning(args,model,optimizer, cls_texts, prior_disc,margin,epochs=
         for cls_idx, cls_text in enumerate(cls_texts):
             with torch.no_grad():
                 tokenized_cls = clip.tokenize(cls_text).to(device)
-                cls_emb = model.encode_text(tokenized_cls)
+                if args.coop:
+                    cls_emb = text_encoder(tokenized_cls, tokenized_cls)
+                else:
+                    cls_emb = text_encoder(tokenized_cls)
+
                 pos_set = set(prior_disc[cls_idx])
                 neg_set = set(total_priors) - set(pos_set)
 
@@ -393,8 +412,18 @@ def text_emb_learning(args,model,optimizer, cls_texts, prior_disc,margin,epochs=
                 pos_txt = clip.tokenize(pos_list).to(device)
                 neg_txt = clip.tokenize(neg_list).to(device)
 
-                pos_emb = model.encode_text(pos_txt)
-                neg_emb = model.encode_text(neg_txt)
+                if args.coop:
+                    pos_emb = text_encoder(pos_txt, pos_txt)
+                else:
+                    pos_emb = text_encoder(pos_txt)
+
+                if args.coop:
+                    neg_emb = text_encoder(neg_txt, neg_txt)
+                else:
+                    neg_emb = text_encoder(neg_txt)
+
+                #pos_emb = text_encoder(pos_txt)
+                #neg_emb = text_encoder(neg_txt)
 
                 test_loss = contrastive_loss(cls_emb, pos_emb, neg_emb, margin)
                 test_loss_list.append(test_loss)
@@ -485,6 +514,7 @@ def main():
     parser.add_argument("-test_freq", type=int, help="test_freq", default=5)
     parser.add_argument("-test_mode", type=str, help="test_mode", default='val')
     parser.add_argument("-coop", type=int, help="coop", default=0)
+    parser.add_argument("-csc", type=int, help="csc", default=0)
 
 
     args = parser.parse_args()
@@ -517,7 +547,7 @@ def main():
         label_list = label_dict[task]
 
     if args.coop:
-        model = CustomCLIP(label_list, model.to('cpu'))
+        model = CustomCLIP(label_list, model.to('cpu'),args)
         model.to(device)
 
 
@@ -571,13 +601,18 @@ def main():
         update_list = ['prompt_learner.ctx']
         params_optimize = model.prompt_learner.parameters()
 
-    optimizer = torch.optim.Adam(params_optimize, lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
-
+    optimizer_all = torch.optim.Adam(params_optimize, lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
+    optimizer_text = torch.optim.Adam(model.parameters() , lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
 
     for stage in range(args.epochs):
         if args.text_emb:
-            text_emb_learning(args,model,optimizer,label_list,chest_prior_disc,margin=1.0,epochs=1)
-        finetune_model(args,train_dataloader,optimizer, model, classifier,update_list, epoch=1)
+            if args.coop:
+                model.text_encoder.use_forward_text = True
+            text_emb_learning(args,model,optimizer_text,label_list,chest_prior_disc,margin=1.0,epochs=1)
+            if args.coop:
+                model.text_encoder.use_forward_text = False
+
+        finetune_model(args,train_dataloader,optimizer_all, model, classifier,update_list, epoch=1)
         if stage%args.test_freq ==0:
             score = zeroshot_process(args,selected_dataloader,model,label_list)
         wandb.log({"val_mAP": score})
