@@ -52,19 +52,17 @@ class TextEncoder(nn.Module):
 
 
 class MLCPromptLearner(nn.Module):
-    def __init__(self, classnames, clip_model):
+    def __init__(self, classnames, clip_model,args):
         super().__init__()
         n_cls = len(classnames)
-        #n_ctx_pos = cfg.TRAINER.COOP_MLC.N_CTX_POS
-        #n_ctx_neg = cfg.TRAINER.COOP_MLC.N_CTX_NEG
-        n_ctx_pos = 16
-        n_ctx_neg = 16
+        n_ctx_pos = args.n_ctx_pos
+        n_ctx_neg = args.n_ctx_neg
+        COOP_MLC_CSC = args.csc
         #ctx_init_pos = cfg.TRAINER.COOP_MLC.POSITIVE_PROMPT_INIT.strip()
         #ctx_init_neg = cfg.TRAINER.COOP_MLC.NEGATIVE_PROMPT_INIT.strip()
         ctx_init_pos= ""
         ctx_init_neg= ""
 
-        COOP_MLC_CSC = False
 
 
         dtype = clip_model.dtype
@@ -214,10 +212,10 @@ class MLCPromptLearner(nn.Module):
 
 
 class DualCoop(nn.Module):
-    def __init__(self,backbonename, classnames, clip_model):
+    def __init__(self,backbonename, classnames, clip_model,args):
         super().__init__()
         self.visual_encoder_type = backbonename
-        self.prompt_learner = MLCPromptLearner(classnames, clip_model)
+        self.prompt_learner = MLCPromptLearner(classnames, clip_model,args)
 
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
@@ -281,7 +279,7 @@ class DualCoop(nn.Module):
         return params
 
 
-def dualcoop(backbonename, classnames, **kwargs):
+def dualcoop(backbonename, classnames, args):
 
 
 
@@ -290,7 +288,7 @@ def dualcoop(backbonename, classnames, **kwargs):
     clip_model.float()
 
     print("Building dualcoop")
-    model = DualCoop(backbonename,classnames, clip_model)
+    model = DualCoop(backbonename,classnames, clip_model ,args)
 
     trainer_finetune_backbone = False
     trainer_finetune_attn = False
@@ -322,7 +320,7 @@ def dualcoop(backbonename, classnames, **kwargs):
         model = nn.DataParallel(model)
     return model
 
-def build_model(backbonename, classnames):
+def build_model(backbonename, classnames, args):
     """
     Args:
         args: all options defined in opts.py and num_classes
@@ -331,7 +329,7 @@ def build_model(backbonename, classnames):
         network model
         architecture name
     """
-    model = dualcoop(backbonename , classnames)
+    model = dualcoop(backbonename , classnames, args)
     network_name = model.network_name if hasattr(model, 'network_name') else backbonename
     arch_name = "{dataset}-{arch_name}".format(
         dataset="MEDFM", arch_name=network_name)

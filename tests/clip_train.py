@@ -26,7 +26,8 @@ from coop.coop import CustomCLIP
 from coop.dualcoop import build_model
 from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLoss3
 
-os.environ["WANDB_MODE"]="offline"
+#os.environ["WANDB_MODE"]="offline"
+WANDB_TITLE = "clip-medfm-1005-test"
 
 # Set a fixed seed for CPU operations
 seed = 100
@@ -41,7 +42,6 @@ if torch.cuda.is_available():
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-WANDB_TITLE = "clip-medfm-0926-test-coop-clip"
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -68,6 +68,51 @@ chest_gpt35_combined_label = [
     "consolidation is a solidification of lung tissue, often appearing as a white, opaque area within the lung."
 ]
 
+chest_descriptions = [
+    "pleural_effusion is a fluid accumulation, often seen as a darker area on the X-ray, located between the lung and chest wall in the X-ray image domain.",
+    "nodule is a small lump, often seen as a small rounded shadow on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "pneumonia is an infection, often seen as a cloudy area on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "cardiomegaly is an enlarged heart, often seen as an increased heart size on the X-ray, located in the cardiac region in the X-ray image domain.",
+    "hilar_enlargement is an enlargement of the lung hilum, often seen as a prominent shadow on the X-ray, located in the central part of the lungs in the X-ray image domain.",
+    "fracture_old is a healed bone break, often seen as a line or irregularity on the X-ray, located in the bones in the X-ray image domain.",
+    "fibrosis is a scarring, often seen as streaky shadows on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "aortic_calcification is a calcium buildup, often seen as a bright line on the X-ray, located in the aorta in the X-ray image domain.",
+    "tortuous_aorta is a twisted aorta, often seen as a curvy shadow on the X-ray, located in the aortic region in the X-ray image domain.",
+    "thickened_pleura is a thickened pleural lining, often seen as a dense line on the X-ray, located around the lungs in the X-ray image domain.",
+    "TB is a tuberculosis infection, often seen as patchy shadows on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "pneumothorax is a collapsed lung, often seen as a clear space without lung markings on the X-ray, located next to the lung edge in the X-ray image domain.",
+    "emphysema is a lung condition, often seen as areas with decreased density on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "atelectasis is a collapsed or closed off lung, often seen as an area of increased density on the X-ray, located in the affected lung region in the X-ray image domain.",
+    "calcification is a calcium deposit, often seen as bright spots on the X-ray, located in various tissues in the X-ray image domain.",
+    "pulmonary_edema is fluid accumulation, often seen as fluffy shadows on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "increased_lung_markings is an increased visibility of lung vessels, often seen as prominent lines on the X-ray, located in the lung tissue in the X-ray image domain.",
+    "elevated_diaphragm is a raised diaphragm, often seen as a higher position of the diaphragm shadow on the X-ray, located at the base of the lungs in the X-ray image domain.",
+    "consolidation is a lung tissue thickening, often seen as a solid white area on the X-ray, located in the affected lung region in the X-ray image domain."
+]
+
+chest_descriptions_wo_domain = [
+    "pleural_effusion is a fluid accumulation, often seen as a darker area, located between the lung and chest wall.",
+    "nodule is a small lump, often seen as a small rounded shadow, located in the lung tissue.",
+    "pneumonia is an infection, often seen as a cloudy area, located in the lung tissue.",
+    "cardiomegaly is an enlarged heart, often seen as an increased heart size, located in the cardiac region.",
+    "hilar_enlargement is an enlargement of the lung hilum, often seen as a prominent shadow, located in the central part of the lungs.",
+    "fracture_old is a healed bone break, often seen as a line or irregularity, located in the bones.",
+    "fibrosis is a scarring, often seen as streaky shadows, located in the lung tissue.",
+    "aortic_calcification is a calcium buildup, often seen as a bright line, located in the aorta.",
+    "tortuous_aorta is a twisted aorta, often seen as a curvy shadow, located in the aortic region.",
+    "thickened_pleura is a thickened pleural lining, often seen as a dense line, located around the lungs.",
+    "TB is a tuberculosis infection, often seen as patchy shadows, located in the lung tissue.",
+    "pneumothorax is a collapsed lung, often seen as a clear space without lung markings, located next to the lung edge.",
+    "emphysema is a lung condition, often seen as areas with decreased density, located in the lung tissue.",
+    "atelectasis is a collapsed or closed off lung, often seen as an area of increased density, located in the affected lung region.",
+    "calcification is a calcium deposit, often seen as bright spots, located in various tissues.",
+    "pulmonary_edema is fluid accumulation, often seen as fluffy shadows, located in the lung tissue.",
+    "increased_lung_markings is an increased visibility of lung vessels, often seen as prominent lines, located in the lung tissue.",
+    "elevated_diaphragm is a raised diaphragm, often seen as a higher position of the diaphragm shadow, located at the base of the lungs.",
+    "consolidation is a lung tissue thickening, often seen as a solid white area, located in the affected lung region."
+]
+
+
 endo_gpt35_combined_label =[
     "ulcer is a sore or lesion on the inner lining of the digestive tract, often appearing as an open, crater-like area.",
     "erosion is the gradual wearing away of the lining of the digestive tract, often presenting as a shallow, superficial loss of tissue.",
@@ -76,7 +121,28 @@ endo_gpt35_combined_label =[
 ]
 
 
+endoscopy_descriptions = [
+    "ulcer is a sore, often appearing as a deep, crater-like opening, located in the mucosal layer of the endoscopy image.",
+    "erosion is a superficial damage, often appearing as a shallow, reddened area, located on the surface of the mucosa in the endoscopy image.",
+    "polyp is a growth, often appearing as a raised and rounded protrusion, located on the inner lining of the colon or rectum in the endoscopy image.",
+    "tumor is a mass or lump, often appearing as a larger, irregular growth, located in the affected tissue or organ in the endoscopy image."
+]
+
+endoscopy_descriptions_wo_domain = [
+    "ulcer is a sore, often appearing as a deep, crater-like opening, located in the mucosal layer.",
+    "erosion is a superficial damage, often appearing as a shallow, reddened area, located on the surface of the mucosa.",
+    "polyp is a growth, often appearing as a raised and rounded protrusion, located on the inner lining of the colon or rectum.",
+    "tumor is a mass or lump, often appearing as a larger, irregular growth, located in the affected tissue or organ."
+]
+
+
+
+
 gpt35_label_dict = {"chest": chest_gpt35_combined_label, "endo": endo_gpt35_combined_label}
+
+gpt4_pattern_shape_location_domain_dict = {"chest": chest_descriptions, "endo": endoscopy_descriptions}
+
+gpt4_pattern_shape_location_dict = {"chest": chest_descriptions_wo_domain, "endo": endoscopy_descriptions_wo_domain}
 
 label_dict = {"chest": ['pleural_effusion','nodule','pneumonia','cardiomegaly','hilar_enlargement',
               'fracture_old','fibrosis','aortic_calcification','tortuous_aorta','thickened_pleura' ,'TB','pneumothorax',
@@ -550,6 +616,9 @@ def main():
     parser.add_argument("-coop", type=int, help="coop", default=0)
     parser.add_argument("-csc", type=int, help="csc", default=0)
     parser.add_argument("-dualcoop", type=int, help="dualcoop", default=0)
+    parser.add_argument("-n_ctx_pos", type=int, help="n_ctx_pos", default=16)
+    parser.add_argument("-n_ctx_neg", type=int, help="n_ctx_neg", default=16)
+    parser.add_argument("-clip_model_name", type=str, help="clip_model_name", default="ViT-L/14")
 
 
     args = parser.parse_args()
@@ -568,15 +637,19 @@ def main():
     file_prefix = f'/data/MedFMC/{task}/images'
 
     if args.usage_aug == 0:
-        model, preprocess = clip.load("ViT-L/14", device=device, jit=False)
+        model, preprocess = clip.load(args.clip_model_name, device=device, jit=False)
     else:
-        model, preprocess = clip.load("ViT-L/14", device=device, jit=False)
+        model, preprocess = clip.load(args.clip_model_name, device=device, jit=False)
         train_preprocess =  train_transform(model.visual.input_resolution)
 
     if LOAD:
         model.load_state_dict(torch.load("model_weights.pth"))
 
-    if args.usage_prior_label:
+    if args.usage_prior_label==2:
+        label_list = gpt4_pattern_shape_location_domain_dict[task]
+    elif args.usage_prior_label ==1:
+        label_list = gpt4_pattern_shape_location_dict[task]
+    elif args.usage_prior_label ==-1:
         label_list = gpt35_label_dict[task]
     else:
         label_list = label_dict[task]
@@ -585,7 +658,7 @@ def main():
         model = CustomCLIP(label_list, model.to('cpu'),args)
         model.to(device)
     elif args.dualcoop:
-        model = build_model("RN50",label_list)
+        model = build_model(args.clip_model_name,label_list,args)
 
     if args.usage_classifier == 1:
         classifier = nn.Linear(len(label_list), len(label_list)).to(device)
