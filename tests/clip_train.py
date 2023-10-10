@@ -25,9 +25,11 @@ import os
 from coop.coop import CustomCLIP
 from coop.dualcoop import build_model
 from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLoss3
+import coop.coop_vpt as coop_vpt
 
-#os.environ["WANDB_MODE"]="offline"
-WANDB_TITLE = "clip-medfm-1009-endo"
+
+os.environ["WANDB_MODE"]="offline"
+WANDB_TITLE = "clip-medfm-1010-chest-backbone"
 
 # Set a fixed seed for CPU operations
 seed = 100
@@ -285,6 +287,8 @@ def zeroshot_process(args,data_loader, model, label_list):
             elif args.dualcoop:
                 logits_per_image = model(images,None)
                 logits_per_image = Softmax(logits_per_image.detach())[:, 1, :]
+            elif args.vpt:
+                logits_per_image, _, _ = model(images)
             else:
                 logits_per_image, logits_per_text = model(images, texts)
             probs = logits_per_image.cpu().numpy()
@@ -560,6 +564,8 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
                 logits_per_image = model(images)
             elif args.dualcoop:
                 logits_per_image = model(images, None)
+            elif args.vpt:
+                logits_per_image, _,_ = model(images)
             else:
                 logits_per_image, logits_per_text = model(images, texts)
             #logits_per_text = logits_per_text.T
@@ -622,6 +628,7 @@ def main():
     parser.add_argument("-n_ctx_pos", type=int, help="n_ctx_pos", default=16)
     parser.add_argument("-n_ctx_neg", type=int, help="n_ctx_neg", default=16)
     parser.add_argument("-clip_model_name", type=str, help="clip_model_name", default="ViT-L/14")
+    parser.add_argument("-vpt", type=int, help="vpt", default=0)
 
 
     args = parser.parse_args()
@@ -662,6 +669,9 @@ def main():
         model.to(device)
     elif args.dualcoop:
         model = build_model(args.clip_model_name,label_list,args)
+    elif args.vpt:
+        model = coop_vpt.CustomCLIP(label_list,model.to('cpu'))
+        model.to(device)
 
     if args.usage_classifier == 1:
         classifier = nn.Linear(len(label_list), len(label_list)).to(device)
@@ -723,6 +733,8 @@ def main():
         else:
             update_list = ['x']
             params_optimize = [prompt_group]
+    elif args.vpt:
+        update_list = ['prompt_learner.vis_ctx','prompt_learner.txt_ctx']
 
     optimizer_all = torch.optim.Adam(params_optimize, lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
     optimizer_text = torch.optim.Adam(model.parameters() , lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
