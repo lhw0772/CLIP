@@ -27,7 +27,7 @@ from coop.dualcoop import build_model
 from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLoss3
 
 #os.environ["WANDB_MODE"]="offline"
-WANDB_TITLE = "clip-medfm-1005-test"
+WANDB_TITLE = "clip-medfm-1009-endo"
 
 # Set a fixed seed for CPU operations
 seed = 100
@@ -134,8 +134,6 @@ endoscopy_descriptions_wo_domain = [
     "polyp is a growth, often appearing as a raised and rounded protrusion, located on the inner lining of the colon or rectum.",
     "tumor is a mass or lump, often appearing as a larger, irregular growth, located in the affected tissue or organ."
 ]
-
-
 
 
 gpt35_label_dict = {"chest": chest_gpt35_combined_label, "endo": endo_gpt35_combined_label}
@@ -518,6 +516,11 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
 
         model.prompt_learner.train()
 
+    elif update_layer[0] =='o':
+        model.prompt_learner.train()
+        model.image_encoder.attnpool.train()
+        model.image_encoder.train()
+
     else:
         for name, param in model.named_parameters():
 
@@ -603,7 +606,7 @@ def main():
     parser.add_argument("-lr", type=float, help="learning_rate",default=1e-5)
     parser.add_argument("-update_mode", type=int, help="update mode",default=0)
     parser.add_argument("-text_emb", type=int, help="text embedding mode", default=0)
-    parser.add_argument("-bs", type=int, help="batch size", default=16)
+    parser.add_argument("-bs", type=int, help="batch size", default=32)
     parser.add_argument("-epochs", type=int, help="epochs", default=30)
     parser.add_argument("-task", type=str, help="task", default="chest")
     parser.add_argument("-shot", type=int, help="shot", default=5)
@@ -713,8 +716,13 @@ def main():
         prompt_params = model.prompt_params()
         prompt_group = {'params': prompt_params}
         print('num of params in prompt learner: ', len(prompt_params))
-        params_optimize = [prompt_group]
-        update_list = ['x']
+
+        if args.update_mode == 6:
+            update_list = ['o']
+            params_optimize = model.parameters()
+        else:
+            update_list = ['x']
+            params_optimize = [prompt_group]
 
     optimizer_all = torch.optim.Adam(params_optimize, lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)
     optimizer_text = torch.optim.Adam(model.parameters() , lr=args.lr, betas=(0.9, 0.98), eps=1e-6, weight_decay=0.2)

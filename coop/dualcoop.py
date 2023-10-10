@@ -281,8 +281,6 @@ class DualCoop(nn.Module):
 
 def dualcoop(backbonename, classnames, args):
 
-
-
     print(f"Loading CLIP (backbone: {backbonename})")
     clip_model = load_clip_to_cpu(backbonename)
     clip_model.float()
@@ -290,8 +288,12 @@ def dualcoop(backbonename, classnames, args):
     print("Building dualcoop")
     model = DualCoop(backbonename,classnames, clip_model ,args)
 
-    trainer_finetune_backbone = False
-    trainer_finetune_attn = False
+    if args.update_mode == 6:
+        trainer_finetune_backbone = True
+        trainer_finetune_attn = True
+    else:
+        trainer_finetune_backbone = False
+        trainer_finetune_attn = False
     use_cuda = True
 
     if not trainer_finetune_backbone:
