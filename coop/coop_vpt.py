@@ -100,7 +100,7 @@ class PromptLearner(nn.Module):
         assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
         #self.vpt_dropout = Dropout(cfg.TRAINER.DAPT.VIS_DROPOUT)
-        self.vpt_dropout = Dropout(0.5)
+        self.vpt_dropout = Dropout(0.0)
         vpt_dim = vis_ctx_dim
         clip_patchsize = _pair(patch_size)
         val = math.sqrt(6. / float(3 * reduce(mul, clip_patchsize, 1) + vpt_dim))

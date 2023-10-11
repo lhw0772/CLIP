@@ -28,8 +28,8 @@ from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLos
 import coop.coop_vpt as coop_vpt
 
 
-os.environ["WANDB_MODE"]="offline"
-WANDB_TITLE = "clip-medfm-1010-chest-backbone"
+#os.environ["WANDB_MODE"]="offline"
+WANDB_TITLE = "clip-medfm-1011-domain"
 
 # Set a fixed seed for CPU operations
 seed = 100
@@ -137,8 +137,40 @@ endoscopy_descriptions_wo_domain = [
     "tumor is a mass or lump, often appearing as a larger, irregular growth, located in the affected tissue or organ."
 ]
 
+chest_domain = [
+    "pleural_effusion in the X-ray image domain.",
+    "nodule in the X-ray image domain.",
+    "pneumonia in the X-ray image domain.",
+    "cardiomegaly in the X-ray image domain.",
+    "hilar_enlargement in the X-ray image domain.",
+    "fracture_old in the X-ray image domain.",
+    "fibrosis in the X-ray image domain.",
+    "aortic_calcification in the X-ray image domain.",
+    "tortuous_aorta in the X-ray image domain.",
+    "thickened_pleura in the X-ray image domain.",
+    "TB in the X-ray image domain.",
+    "pneumothorax in the X-ray image domain.",
+    "emphysema in the X-ray image domain.",
+    "atelectasis in the X-ray image domain.",
+    "calcification in the X-ray image domain.",
+    "pulmonary_edema in the X-ray image domain.",
+    "increased_lung_markings in the X-ray image domain.",
+    "elevated_diaphragm in the X-ray image domain.",
+    "consolidation in the X-ray image domain."
+]
+
+endoscopy_domain = [
+    "ulcer in the endoscopy image.",
+    "erosion in the endoscopy image.",
+    "polyp in the endoscopy image.",
+    "tumor in the endoscopy image."
+]
+
+
 
 gpt35_label_dict = {"chest": chest_gpt35_combined_label, "endo": endo_gpt35_combined_label}
+
+gpt4_domain_dict = {"chest": chest_domain, "endo": endoscopy_domain}
 
 gpt4_pattern_shape_location_domain_dict = {"chest": chest_descriptions, "endo": endoscopy_descriptions}
 
@@ -655,7 +687,9 @@ def main():
     if LOAD:
         model.load_state_dict(torch.load("model_weights.pth"))
 
-    if args.usage_prior_label==2:
+    if args.usage_prior_label==3:
+        label_list = gpt4_domain_dict[task]
+    elif args.usage_prior_label==2:
         label_list = gpt4_pattern_shape_location_domain_dict[task]
     elif args.usage_prior_label ==1:
         label_list = gpt4_pattern_shape_location_dict[task]
