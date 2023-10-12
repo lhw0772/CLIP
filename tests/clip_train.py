@@ -26,10 +26,11 @@ from coop.coop import CustomCLIP
 from coop.dualcoop import build_model
 from utils.asymmetric_loss import AsymmetricLoss, AsymmetricLoss2, AsymmetricLoss3
 import coop.coop_vpt as coop_vpt
+from utils.visualize import visualize_with_spatial_logits
 
 
 #os.environ["WANDB_MODE"]="offline"
-WANDB_TITLE = "clip-medfm-1011-domain"
+WANDB_TITLE = "clip-medfm-1012-spatial-logit"
 
 # Set a fixed seed for CPU operations
 seed = 100
@@ -307,6 +308,8 @@ def zeroshot_process(args,data_loader, model, label_list):
     labels = np.empty((0, len(label_list)), dtype=np.float32)
     Softmax = torch.nn.Softmax(dim=1)
 
+    data_i = 0
+
     for batch in tqdm(data_loader, total=len(data_loader)):
         images, texts, label = batch
 
@@ -317,7 +320,10 @@ def zeroshot_process(args,data_loader, model, label_list):
             if args.coop:
                 logits_per_image = model(images)
             elif args.dualcoop:
-                logits_per_image = model(images,None)
+                if args.visualize_feat:
+                    logits_per_image, spatial_logits = model(images, None)
+                else:
+                    logits_per_image = model(images,None)
                 logits_per_image = Softmax(logits_per_image.detach())[:, 1, :]
             elif args.vpt:
                 logits_per_image, _, _ = model(images)
@@ -326,6 +332,15 @@ def zeroshot_process(args,data_loader, model, label_list):
             probs = logits_per_image.cpu().numpy()
             predictions = np.concatenate((predictions,probs),axis=0)
             labels = np.concatenate((labels, label), axis=0)
+
+            if args.visualize_feat:
+                #print (data_i)
+                if data_i == 0:
+                    visualize_with_spatial_logits(images,spatial_logits,label,probs,label_list)
+
+                data_i = data_i+1
+
+
 
     # 각 클래스별로 AP 계산
     aps = []
@@ -552,6 +567,22 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
 
         model.prompt_learner.train()
 
+    elif update_layer[0] == 'att':  # dualcoop att
+        for name, param in model.named_parameters():
+            if name.find("text_encoder") != -1:
+                param.requires_grad = False
+            elif name.find("attnpool.k_proj.weight") !=-1:
+                param.requires_grad = True
+            """
+            elif name.find("attnpool.q_proj.weight") !=-1:
+                param.requires_grad = True
+            elif name.find("attnpool.v_proj.weight") !=-1:
+                param.requires_grad = True
+            """
+
+        model.prompt_learner.train()
+        model.image_encoder.attnpool.train()
+
     elif update_layer[0] =='o':
         model.prompt_learner.train()
         model.image_encoder.attnpool.train()
@@ -595,7 +626,10 @@ def finetune_model(args,train_dataloader,optimizer, model, classifier , update_l
             if args.coop:
                 logits_per_image = model(images)
             elif args.dualcoop:
-                logits_per_image = model(images, None)
+                if args.visualize_feat:
+                    logits_per_image, spatial_logits = model(images, None)
+                else:
+                    logits_per_image = model(images, None)
             elif args.vpt:
                 logits_per_image, _,_ = model(images)
             else:
@@ -661,7 +695,7 @@ def main():
     parser.add_argument("-n_ctx_neg", type=int, help="n_ctx_neg", default=16)
     parser.add_argument("-clip_model_name", type=str, help="clip_model_name", default="ViT-L/14")
     parser.add_argument("-vpt", type=int, help="vpt", default=0)
-
+    parser.add_argument("-visualize_feat", type=int, help="visualize_feat", default=0)
 
     args = parser.parse_args()
 
@@ -764,6 +798,9 @@ def main():
         if args.update_mode == 6:
             update_list = ['o']
             params_optimize = model.parameters()
+        elif args.update_mode == 3:
+            update_list = ['att']
+            params_optimize = list(model.attn_params()) + prompt_group['params']
         else:
             update_list = ['x']
             params_optimize = [prompt_group]

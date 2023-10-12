@@ -8,6 +8,7 @@ from clip.simple_tokenizer import SimpleTokenizer as _Tokenizer
 from copy import deepcopy
 import torch.nn.functional as F
 import os
+from utils.visualize import visualize_with_attention
 
 
 _tokenizer = _Tokenizer()
@@ -223,7 +224,7 @@ class DualCoop(nn.Module):
         #self.logit_scale = cfg.TRAINER.COOP_MLC.LS
         self.logit_scale = 100.
         self.dtype = clip_model.dtype
-        #self.cfg = cfg
+        self.visualize_feat = args.visualize_feat
 
     def forward(self, image, cls_id=None):
         # get image and text features
@@ -235,8 +236,13 @@ class DualCoop(nn.Module):
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         image_features_norm = image_features / image_features.norm(dim=1, keepdim=True)
 
+        #visualize_with_attention(image[0], attn_weights[0][0])
+
         # Class-Specific Region Feature Aggregation
         output = 20 * F.conv1d(image_features_norm, text_features[:, :, None])
+
+        spatial_logits = output.clone()
+
         b, c, _ = output.shape
         output_half = output[:,  c // 2:]
         w_half = F.softmax(output_half, dim=-1)
@@ -248,7 +254,10 @@ class DualCoop(nn.Module):
         # convert the shape of logits to [b, 2, num_class]
         logits = output.resize(b, 2, c//2)
 
-        return logits
+        if self.visualize_feat:
+            return logits, spatial_logits
+        else:
+            return logits
 
     @property
     def network_name(self):
